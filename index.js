@@ -314,7 +314,7 @@ class ImpotsConnector extends CookieKonnector {
           'error',
           `[otp-diag] submit failed with status ${
             err.statusCode || 'none'
-          } : ${extractText(errorBody(err)).slice(0, 400)}`
+          } : ${redact(extractText(errorBody(err))).slice(0, 400)}`
         )
         throw new Error(errors.VENDOR_DOWN)
       }
@@ -833,15 +833,31 @@ function promptForCode(question) {
   })
 }
 
+// Random salt, regenerated at every run. A security code is only 6 digits, so
+// an unsalted hash of it could be reversed in a second with a lookup table.
+// Salting keeps the fingerprints comparable inside one run, which is all we
+// need to tell two attempts apart, and meaningless outside of it.
+const FINGERPRINT_SALT = crypto.randomBytes(16).toString('hex')
+
 // Non reversible short fingerprint, used to compare two values in the logs
 // without ever writing the value itself (security codes, session tokens)
 function fingerprint(value) {
   if (value === undefined || value === null || value === '') return 'empty'
   return crypto
     .createHash('sha1')
+    .update(FINGERPRINT_SALT)
     .update(String(value).trim())
     .digest('hex')
     .slice(0, 8)
+}
+
+// Strip from a page extract what identifies the user before it reaches the
+// logs: email addresses (the idp masks the one it displays, but not the ones
+// it may echo back) and long digit runs (fiscal number, avis number...)
+function redact(text) {
+  return String(text)
+    .replace(/[\w.+-]*@[\w-]+\.[\w.-]+/g, '<email>')
+    .replace(/\b\d{8,}\b/g, '<digits>')
 }
 
 // Body of a failed request-promise call, whatever the error shape
@@ -896,7 +912,7 @@ function logOtpDiagnostics(label, $) {
     const hiddenAlerts = []
     $('[role="alert"], .fr-alert, .fr-error-text').each((idx, el) => {
       const $el = $(el)
-      const text = $el.text().replace(/\s+/g, ' ').trim()
+      const text = redact($el.text().replace(/\s+/g, ' ').trim())
       if (!text) return
       const list =
         $el.closest('.fr-hidden, [hidden], [style*="display:none"]').length > 0
@@ -914,7 +930,7 @@ function logOtpDiagnostics(label, $) {
       'credentialsMessage',
       'loginFieldsetMessage'
     ]) {
-      const text = $(`#${id}`).text().replace(/\s+/g, ' ').trim()
+      const text = redact($(`#${id}`).text().replace(/\s+/g, ' ').trim())
       if (text) messageBoxes[id] = text
     }
 
@@ -950,7 +966,10 @@ function logOtpDiagnostics(label, $) {
         } hidden alerts, first ones ${JSON.stringify(hiddenAlerts.slice(0, 3))}`
       )
     }
-    log('warn', `[otp-diag] ${label}: text="${extractText($).slice(0, 600)}"`)
+    log(
+      'warn',
+      `[otp-diag] ${label}: text="${redact(extractText($)).slice(0, 600)}"`
+    )
   } catch (err) {
     log('warn', `[otp-diag] ${label}: diagnostics failed: ${err.message}`)
   }
