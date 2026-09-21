@@ -529,29 +529,60 @@ class ImpotsConnector extends CookieKonnector {
     //    'Adresse postale': '2 RUE DU MOULIN00001 VILLE'
     //  }
 
-    // We extracted the address this way to be able to keep the cariage return information
-    //  and parse it. The block is absent when the website serves a degraded
-    // page, and losing the address must not cost the whole identity.
-    const rawAddress = $('#adressepostale').html()
-    if (rawAddress === null) {
-      log(
-        'warn',
-        'No address block on affichageadresse.do, identity will be saved without it'
-      )
-      logOtpDiagnostics('identity-no-address', $)
-    }
-    const formattedAddress = (rawAddress || '').replace('<br>', '\n')
+    // The rows actually scraped, to notice a markup change from the logs
+    log('info', `Profile rows: ${JSON.stringify(infos.map(info => info.key))}`)
 
-    const linesAddress = formattedAddress.split(/\n|<br>/)
-    // <br> is found in some long address as line separator
-    const lastLineAddress = linesAddress.pop() // Remove the city line from array
-    const street = linesAddress.join('\n')
-    const lastLineMatch = lastLineAddress.match(/^\d{5}/)
-    const postcode = lastLineMatch ? lastLineMatch[0] : null
-    // replace(null, '') would have looked for the literal string "null"
-    const city = postcode
-      ? lastLineAddress.replace(postcode, '').trim()
-      : lastLineAddress.trim()
+    // We extracted the address this way to be able to keep the cariage return
+    // information and parse it
+    const rawAddress = $('#adressepostale').html()
+    let formattedAddress = ''
+    let street = ''
+    let postcode = null
+    let city = ''
+
+    if (rawAddress !== null) {
+      formattedAddress = rawAddress.replace('<br>', '\n')
+      const linesAddress = formattedAddress.split(/\n|<br>/)
+      // <br> is found in some long address as line separator
+      const lastLineAddress = linesAddress.pop() // Remove the city line
+      street = linesAddress.join('\n')
+      const lastLineMatch = lastLineAddress.match(/^\d{5}/)
+      postcode = lastLineMatch ? lastLineMatch[0] : null
+      // replace(null, '') would have looked for the literal string "null"
+      city = postcode
+        ? lastLineAddress.replace(postcode, '').trim()
+        : lastLineAddress.trim()
+    } else {
+      // Since september 2026 the profile page has no #adressepostale anymore.
+      // The address is still there, in the personal information rows, on a
+      // single line: "ALLURE BAT C 27 RUE DU POURTOUR - 78360 MONTESSON"
+      const row = infos.find(info => /Adresse postale/i.test(info.key))
+      const line = row ? String(row.value).replace(/\s+/g, ' ').trim() : ''
+      if (line) {
+        log(
+          'info',
+          'Address read from the profile rows, #adressepostale is gone'
+        )
+        // Anchored on the postcode, which also covers the older markup where
+        // the street and the postcode were not separated
+        const parts = line.match(/^(.*?)[\s-]*(\d{5})\s+(.+)$/)
+        if (parts) {
+          street = parts[1].trim()
+          postcode = parts[2]
+          city = parts[3].trim()
+          formattedAddress = `${street}\n${postcode} ${city}`
+        } else {
+          street = line
+          formattedAddress = line
+        }
+      } else {
+        log(
+          'warn',
+          'No address block on affichageadresse.do, identity will be saved without it'
+        )
+        logOtpDiagnostics('identity-no-address', $)
+      }
+    }
 
     // Structuring as a io.cozy.contacts
     const maritalStatusTable = {
