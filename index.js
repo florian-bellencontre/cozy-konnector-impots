@@ -70,11 +70,24 @@ class ImpotsConnector extends CookieKonnector {
     try {
       log('info', 'Testing previous session...')
       const $ = await this.rq(`${baseUrl}/enp/documents.do?n=0`)
-      const isLogged = $('.date').find('a').length > 0
+      // The document list cannot be the session probe on its own: the DGFiP
+      // empties it during its maintenance windows (21-23 september 2026 for
+      // instance) and an empty list would then be read as an expired session,
+      // sending the user through a new OTP challenge at every run.
+      const hasDocuments = $('.date').find('a').length > 0
+      const isLogged = hasDocuments || isPersonalSpace($)
       log(
         'info',
-        isLogged ? 'Previous session still valid' : 'Previous session expired'
+        `${
+          isLogged ? 'Previous session still valid' : 'Previous session expired'
+        } (documents listed: ${hasDocuments})`
       )
+      if (isLogged && !hasDocuments) {
+        log(
+          'warn',
+          'Session is valid but the website lists no document, it is probably under maintenance'
+        )
+      }
       return isLogged
     } catch (err) {
       log('debug', `testSession failed: ${err.message}`)
@@ -212,9 +225,13 @@ class ImpotsConnector extends CookieKonnector {
         await this.rq(confirmUrl)
         log('info', 'Successfully logged in')
       }
-    } else if (otpHandled && (await this.testSession())) {
-      // After the OTP validation, the website may open the session directly
-      // without going through the usual postMessage redirect
+    } else if (
+      otpHandled &&
+      (isPersonalSpace($) || (await this.testSession()))
+    ) {
+      // After the OTP validation, the website opens the session directly and
+      // answers with the dashboard, without going through the usual
+      // postMessage redirect
       log('info', 'Successfully logged in after OTP validation')
     } else if ($.html().includes("postMessage('lmdp,4665'")) {
       log('error', 'detected a maintenance, lmdp,4665')
@@ -812,6 +829,26 @@ function validateLogin(login) {
   }
 }
 
+// A page of the idp asking for credentials or for a security code, as
+// opposed to a page of the personal space
+function isLoginPage($) {
+  return (
+    isOtpRequested($) ||
+    $('input[name="pwd"], #formulairePrincipal').length > 0 ||
+    /Connexion . l'espace Finances publiques/i.test($('title').first().text())
+  )
+}
+
+// A page of the logged in personal space. Recognised on the markers the
+// website puts on every one of them, never on the presence of documents,
+// which says nothing about the session (see testSession).
+function isPersonalSpace($) {
+  if (isLoginPage($)) return false
+  return /Tableau de bord|Mon espace Finances publiques|Num.ro fiscal/i.test(
+    `${$('title').first().text()} ${extractText($)}`
+  )
+}
+
 function isOtpRequested($) {
   return (
     $.html().includes("postMessage('otp") ||
@@ -858,6 +895,7 @@ function redact(text) {
   return String(text)
     .replace(/[\w.+-]*@[\w-]+\.[\w.-]+/g, '<email>')
     .replace(/\b\d{8,}\b/g, '<digits>')
+    .replace(/(Bienvenue)\s+[^,.]{2,60}/gi, '$1 <name>')
 }
 
 // Body of a failed request-promise call, whatever the error shape
