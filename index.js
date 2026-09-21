@@ -530,8 +530,17 @@ class ImpotsConnector extends CookieKonnector {
     //  }
 
     // We extracted the address this way to be able to keep the cariage return information
-    //  and parse it
-    const formattedAddress = $('#adressepostale').html().replace('<br>', '\n')
+    //  and parse it. The block is absent when the website serves a degraded
+    // page, and losing the address must not cost the whole identity.
+    const rawAddress = $('#adressepostale').html()
+    if (rawAddress === null) {
+      log(
+        'warn',
+        'No address block on affichageadresse.do, identity will be saved without it'
+      )
+      logOtpDiagnostics('identity-no-address', $)
+    }
+    const formattedAddress = (rawAddress || '').replace('<br>', '\n')
 
     const linesAddress = formattedAddress.split(/\n|<br>/)
     // <br> is found in some long address as line separator
@@ -539,7 +548,10 @@ class ImpotsConnector extends CookieKonnector {
     const street = linesAddress.join('\n')
     const lastLineMatch = lastLineAddress.match(/^\d{5}/)
     const postcode = lastLineMatch ? lastLineMatch[0] : null
-    const city = lastLineAddress.replace(postcode, '').trim()
+    // replace(null, '') would have looked for the literal string "null"
+    const city = postcode
+      ? lastLineAddress.replace(postcode, '').trim()
+      : lastLineAddress.trim()
 
     // Structuring as a io.cozy.contacts
     const maritalStatusTable = {
@@ -551,7 +563,9 @@ class ImpotsConnector extends CookieKonnector {
     }
     result.contact.maritalStatus =
       maritalStatusTable[result.contact.maritalStatus]
-    result.contact.address = [{ formattedAddress, street, postcode, city }]
+    result.contact.address = formattedAddress
+      ? [{ formattedAddress, street, postcode, city }]
+      : []
 
     for (const info of infos) {
       if (info.key === 'Prénom') {
